@@ -1,3 +1,4 @@
+
 # task: 高性能内存任务执行器
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/oy3o/task)](https://goreportcard.com/report/github.com/oy3o/task)
@@ -14,6 +15,7 @@
 *   **资源保护**: 限制最大并发协程数，防止流量突增导致 OOM（内存溢出）。
 *   **故障隔离**: 自动捕获任务中的 Panic，防止单个任务崩溃导致整个进程退出。
 *   **优雅停机**: 支持 Drain 模式，在服务退出前确保正在执行的任务被处理完毕，防止数据丢失。
+*   **类型安全**: 利用泛型支持强类型返回值 (`Future[T]`)，告别类型断言。
 *   **可观测性**: 提供实时指标监控（运行中、排队中、已处理、Panic 次数）。
 *   **零依赖**: 仅依赖 Go 标准库实现，极致轻量。
 
@@ -89,6 +91,33 @@ if err != nil {
 }
 ```
 
+### 4. 异步结果 (泛型 Future)
+
+以类型安全的方式获取后台任务的执行结果，无需 Interface 类型断言。
+
+```go
+// 提交一个返回 string 的任务
+// 无需修改 Runner 结构，直接使用泛型 Submit 函数
+future, err := task.Submit(r, func(ctx context.Context) (string, error) {
+    // ... 业务逻辑 ...
+    return "success", nil
+})
+
+if err != nil {
+    // 处理提交失败 (如队列已满)
+}
+
+// 带超时等待结果
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+
+val, err := future.Get(ctx) // val 是 string 类型
+if err != nil {
+    // 处理超时、业务错误或任务 Panic
+}
+fmt.Println("Result:", val)
+```
+
 ## 可观测性 (Observability)
 
 您可以实时监控 Runner 的健康状态，用于 HPA（自动扩缩容）或健康检查。
@@ -128,3 +157,5 @@ func run() {
 | `WithMaxWorkers(n)` | 最大并发 Worker 数 (并发协程数) | 10 |
 | `WithQueueSize(n)` | 等待队列的最大容量 | 1000 |
 | `WithErrorHandler(fn)` | Panic 发生时的自定义回调函数 | 打印到标准输出 |
+
+// end of ./task/README.zh.md

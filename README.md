@@ -14,6 +14,7 @@ It bridges the gap between raw `go func()` (which is uncontrolled and risky) and
 *   **Protection**: Limits the number of concurrent goroutines to prevent OOM (Out of Memory).
 *   **Fault Tolerance**: Automatically catches panics in tasks to keep the main process alive.
 *   **Graceful Shutdown**: Ensures all running tasks are completed before the server exits (Drain pattern).
+*   **Type Safety**: Use generics to return typed results (`Future[T]`), eliminating interface assertions.
 *   **Observability**: Provides real-time metrics (Active, Queued, Processed, Panics).
 *   **Zero Dependency**: Built using only the Go standard library.
 
@@ -89,6 +90,32 @@ if err != nil {
 }
 ```
 
+### 4. Async Results (Generics)
+
+Retrieve results from background tasks in a type-safe manner using `Future[T]`.
+
+```go
+// Submit a task that returns a string
+future, err := task.Submit(r, func(ctx context.Context) (string, error) {
+    // ... business logic ...
+    return "success", nil
+})
+
+if err != nil {
+    // Handle submission error (e.g., QueueFull)
+}
+
+// Wait for result with timeout
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+
+val, err := future.Get(ctx) // val is string
+if err != nil {
+    // Handle timeout, task error, or task panic
+}
+fmt.Println("Result:", val)
+```
+
 ## Observability
 
 Monitor your worker pool health in real-time.
@@ -126,3 +153,4 @@ func run() {
 | `WithMaxWorkers(n)` | Max number of concurrent goroutines. | 10 |
 | `WithQueueSize(n)` | Max number of tasks waiting in queue. | 1000 |
 | `WithErrorHandler(fn)` | Custom callback for handling panics. | Log to stdout |
+

@@ -47,19 +47,16 @@ func NewRunner(opts ...Option) *Runner {
 		opt(c)
 	}
 
-	// 初始化生命周期 Context
-	ctx, cancel := context.WithCancel(context.Background())
-
 	return &Runner{
 		cfg:      c,
 		taskChan: make(chan TaskFunc, c.queueSize),
-		ctx:      ctx,
-		cancel:   cancel,
 	}
 }
 
 func (r *Runner) Start(ctx context.Context) error {
 	r.startOnce.Do(func() {
+		// 绑定生命周期 Context 到 caller 传入的 ctx
+		r.ctx, r.cancel = context.WithCancel(ctx)
 		r.running.Store(true)
 		for i := 0; i < r.cfg.maxWorkers; i++ {
 			r.wg.Add(1)
@@ -130,32 +127,30 @@ func (r *Runner) Submit(task TaskFunc) error {
 // SubmitAndWait 提交任务并等待完成 (同步模式)
 // 适用于 HTTP 请求中需要并发处理但必须等待结果的场景。
 func (r *Runner) SubmitAndWait(ctx context.Context, task TaskFunc) error {
-	// 使用 buffered channel 防止接收方挂掉导致死锁
 	done := doneChanPool.Get().(chan struct{})
 
-	// 防御性编程：确保拿出来的 Channel 是空的
+	// 防御性编程：清空脏信号
 	select {
 	case <-done:
 	default:
 	}
 
-	// 包装任务：执行完毕后通知 done
-	err := r.Submit(func(innerCtx context.Context) {
-		// 使用 defer 确保即使 task 发生 Panic，也能通知调用方
+	err := r.Submit(func(runnerCtx context.Context) {
 		defer func() {
 			done <- struct{}{}
 		}()
-		task(innerCtx)
+		// 核心修复: 注入 Caller 的 Context。
+		// 任务的生命周期现在与请求方绑定，而不再是全局 Runner 的上下文。
+		task(ctx)
 	})
+
 	if err != nil {
-		// 队列满或 Runner 已关闭, 提交失败（如队列满），没人持有该 Channel，安全放回 Pool
 		doneChanPool.Put(done)
 		return err
 	}
 
 	select {
 	case <-done:
-		// 此时我们消费了 Channel 中的数据，Channel 变空，可以安全复用
 		doneChanPool.Put(done)
 		return nil
 	case <-ctx.Done():
@@ -170,26 +165,19 @@ func (r *Runner) SubmitAndWait(ctx context.Context, task TaskFunc) error {
 
 func (r *Runner) worker() {
 	defer r.wg.Done()
-
-	// 使用 Runner 的生命周期 Context
-	// 这样任务可以通过 ctx.Done() 感知到 Runner.Stop() 的调用
 	ctx := r.ctx
 
 	for task := range r.taskChan {
-		// 1. 标记 Worker 忙碌
 		r.activeWorkers.Add(1)
 
-		// 2. 安全执行
-		Safely(ctx, task, func(ctx context.Context, p any) {
-			// 捕获 Panic 并记录指标
-			r.statsPanics.Add(1)
-			if r.cfg.errHandler != nil {
-				r.cfg.errHandler(ctx, p)
-			}
-		})
+		// 核心修复: 通过 Safely 的返回值精确判断状态机走向
+		panicked := Safely(ctx, task, r.cfg.errHandler)
 
-		// 3. 更新指标
-		r.activeWorkers.Add(-1)
 		r.statsProcessed.Add(1)
+		if panicked {
+			r.statsPanics.Add(1)
+		}
+
+		r.activeWorkers.Add(-1)
 	}
 }

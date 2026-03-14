@@ -27,15 +27,14 @@ func (f *Future[T]) Get(ctx context.Context) (T, error) {
 
 // Submit 泛型提交函数。
 // 这是对 Runner 的扩展，不修改 Runner 内部结构，只在应用层封装。
-func Submit[T any](r *Runner, fn func(ctx context.Context) (T, error)) (*Future[T], error) {
+func Submit[T any](callerCtx context.Context, r *Runner, fn func(ctx context.Context) (T, error)) (*Future[T], error) {
 	// 1. 预分配 Future，channel 容量为 0 (同步) 或 1 均可，这里用 0 省内存
 	f := &Future[T]{
 		done: make(chan struct{}),
 	}
 
 	// 2. 包装任务
-	taskFunc := func(ctx context.Context) {
-		// 确保无论 panic 还是正常退出，done 都会关闭
+	taskFunc := func(runnerCtx context.Context) {
 		defer close(f.done)
 
 		// 捕获 panic，将其转化为 error 返回给 Future 的调用者
@@ -43,11 +42,13 @@ func Submit[T any](r *Runner, fn func(ctx context.Context) (T, error)) (*Future[
 		defer func() {
 			if p := recover(); p != nil {
 				f.err = fmt.Errorf("task panic: %v", p)
+				// 向上抛出，使得 worker() 中的 Safely 能够捕获并记录 Panic 指标
 				panic(p)
 			}
 		}()
 
-		f.val, f.err = fn(ctx)
+		// 执行时绑定 callerCtx，防止 Runner 全局 Context 导致任务无法被外部取消
+		f.val, f.err = fn(callerCtx)
 	}
 
 	// 3. 提交给 Worker Pool
